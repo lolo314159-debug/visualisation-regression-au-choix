@@ -13,10 +13,17 @@ st.write("Analyse des tendances de long terme depuis 2000.")
 # Configuration dans la barre latérale
 uploaded_file = st.sidebar.file_uploader("Charger votre fichier Excel (colonne 'Ticker')", type="xlsx")
 regression_type = st.sidebar.radio("Type de régression", ("Logarithmique (Recommandé)", "Linéaire"))
-
 if uploaded_file:
     df_tickers = pd.read_excel(uploaded_file)
-    ticker_list = df_tickers['Ticker'].tolist()
+    
+    # On récupère tous les noms de colonnes du fichier Excel
+    columns = df_tickers.columns.tolist()
+    
+    # On demande à l'utilisateur quelle colonne contient les Tickers
+    ticker_col = st.sidebar.selectbox("Sélectionnez la colonne des Tickers", columns)
+    
+    ticker_list = df_tickers[ticker_col].tolist()
+    
     selected_ticker = st.sidebar.selectbox("Sélectionnez une action", ticker_list)
     
     if selected_ticker:
