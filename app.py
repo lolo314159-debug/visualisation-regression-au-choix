@@ -7,6 +7,7 @@ import plotly.graph_objects as go
 from fpdf import FPDF
 import io
 
+
 st.set_page_config(page_title="Analyse Quantitative", layout="wide")
 
 # --- SIDEBAR ---
@@ -34,7 +35,11 @@ reg_mode = st.sidebar.radio("Modèle :", ("Logarithmique", "Linéaire"))
 
 # --- CALCULS ET GRAPHIQUE ---
 if selected_ticker:
-    ticker_obj = yf.Ticker(selected_ticker)
+    @st.cache_data(ttl=3600)  # Cette ligne dit à Streamlit : "Garde le résultat en mémoire pendant 1h"
+    def load_data(ticker):
+        return yf.download(ticker, start="2000-01-01")
+    ticker_obj = load_data(selected_ticker)
+    #  ticker_obj = yf.Ticker(selected_ticker)
     data = ticker_obj.history(start="2000-01-01")
     
     if not name_display:
