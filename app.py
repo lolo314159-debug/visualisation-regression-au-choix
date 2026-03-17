@@ -5,143 +5,95 @@ import numpy as np
 from sklearn.linear_model import LinearRegression
 import plotly.graph_objects as go
 
-st.set_page_config(page_title="Analyse Quantitative Premium (Light)", layout="wide")
+st.set_page_config(page_title="Analyse Quantitative", layout="wide")
 
-# --- BARRE LATÉRALE ---
+# --- SIDEBAR ---
 st.sidebar.header("Configuration")
-input_method = st.sidebar.radio("Choisir la méthode :", ("Fichier Excel", "Saisie Manuelle"))
+method = st.sidebar.radio("Source :", ("Saisie Manuelle", "Fichier Excel"))
 
 selected_ticker = ""
-display_name = ""
+name_display = ""
 
-if input_method == "Fichier Excel":
-    uploaded_file = st.sidebar.file_uploader("1. Charger Excel", type="xlsx")
-    if uploaded_file:
-        df_tickers = pd.read_excel(uploaded_file)
-        cols = df_tickers.columns.tolist()
-        t_col = st.sidebar.selectbox("Colonne Tickers", cols, index=cols.index('Ticker') if 'Ticker' in cols else 0)
+if method == "Fichier Excel":
+    file = st.sidebar.file_uploader("Charger Excel", type="xlsx")
+    if file:
+        df_excel = pd.read_excel(file)
+        cols = df_excel.columns.tolist()
+        t_col = st.sidebar.selectbox("Colonne Tickers", cols)
         n_col = next((c for c in cols if "nom" in c.lower()), None)
-        
-        ticker_list = df_tickers[t_col].dropna().unique().tolist()
-        selected_ticker = st.sidebar.selectbox("Action", ticker_list)
+        ticker_list = df_excel[t_col].dropna().unique().tolist()
+        selected_ticker = st.sidebar.selectbox("Choisir l'action", ticker_list)
         if n_col:
-            display_name = df_tickers[df_tickers[t_col] == selected_ticker][n_col].iloc[0]
+            name_display = df_excel[df_excel[t_col] == selected_ticker][n_col].iloc[0]
 else:
-    # Par défaut sur MSFT pour l'exemple
-    selected_ticker = st.sidebar.text_input("2. Saisir Ticker (ex: AAPL, AIR.PA)", "MSFT").upper()
+    selected_ticker = st.sidebar.text_input("Ticker (ex: NVDA, OR.PA)", "MSFT").upper()
 
-regression_type = st.sidebar.radio("3. Modèle de calcul", ("Logarithmique", "Linéaire"))
+reg_mode = st.sidebar.radio("Modèle :", ("Logarithmique", "Linéaire"))
 
-# --- RÉCUPÉRATION ET CALCULS ---
+# --- CALCULS ET GRAPHIQUE ---
 if selected_ticker:
-    with st.spinner(f'Téléchargement et analyse de {selected_ticker}...'):
-        ticker_obj = yf.Ticker(selected_ticker)
-        # Télécharger depuis 2000
-        data = ticker_obj.history(start="2000-01-01")
-        
-        # Récupérer le nom complet via Yahoo Finance si pas trouvé dans l'Excel
-        if not display_name:
-            try: display_name = ticker_obj.info.get('longName', selected_ticker)
-            except: display_name = selected_ticker
+    ticker_obj = yf.Ticker(selected_ticker)
+    data = ticker_obj.history(start="2000-01-01")
+    
+    if not name_display:
+        try: name_display = ticker_obj.info.get('longName', selected_ticker)
+        except: name_display = selected_ticker
 
-    if not data.empty and len(data) > 20:
-        # Nettoyage
-        df = data[['Close']].copy()
-        df = df.dropna().reset_index()
+    if not data.empty and len(data) > 30:
+        df = data[['Close']].copy().dropna().reset_index()
         
-        # Maths pour la régression
-        df['Index'] = np.arange(len(df)).reshape(-1, 1)
-        X = df['Index'].values.reshape(-1, 1)
-        # Régression sur log ou prix brut
-        y_val = np.log(df['Close'].values) if regression_type == "Logarithmique" else df['Close'].values
+        # Régression
+        df['Idx'] = np.arange(len(df)).reshape(-1, 1)
+        X = df['Idx'].values.reshape(-1, 1)
+        y = np.log(df['Close'].values) if reg_mode == "Logarithmique" else df['Close'].values
         
-        model = LinearRegression().fit(X, y_val)
+        model = LinearRegression().fit(X, y)
         y_pred = model.predict(X)
-        std_err = np.std(y_val - y_pred)
+        std_dev = np.std(y - y_pred)
         
-        # Fonction utilitaire pour repasser en prix réel
-        def to_price(v): return np.exp(v) if regression_type == "Logarithmique" else v
+        def rev(v): return np.exp(v) if reg_mode == "Logarithmique" else v
 
-        # --- GRAPHIQUE ÉPURÉ (FONDS BLANC) ---
-        title_text = f"<b>{display_name}</b> <span style='color:#555;'>| {selected_ticker}</span>"
-        
+        # --- PLOTLY (FOND BLANC) ---
         fig = go.Figure()
 
-        # Zones de volatilité Pastel (Arrière-plan)
-        # Zone 2-Sigma (Rouge très clair)
-        fig.add_trace(go.Scatter(x=df['Date'], y=to_price(y_pred + 2*std_err), line=dict(width=0), showlegend=False))
-        fig.add_trace(go.Scatter(x=df['Date'], y=to_price(y_pred - 2*std_err), fill='tonexty', 
-                                 fillcolor='rgba(255, 100, 100, 0.08)', line=dict(width=0), name="Zone ±2σ (Extrême)"))
+        # Zones Pastel
+        fig.add_trace(go.Scatter(x=df['Date'], y=rev(y_pred + 2*std_dev), line_color='rgba(0,0,0,0)', showlegend=False))
+        fig.add_trace(go.Scatter(x=df['Date'], y=rev(y_pred - 2*std_dev), fill='tonexty', fillcolor='rgba(255, 0, 0, 0.05)', line_color='rgba(0,0,0,0)', name="±2σ"))
+        
+        fig.add_trace(go.Scatter(x=df['Date'], y=rev(y_pred + std_dev), line_color='rgba(0,0,0,0)', showlegend=False))
+        fig.add_trace(go.Scatter(x=df['Date'], y=rev(y_pred - std_dev), fill='tonexty', fillcolor='rgba(0, 200, 0, 0.1)', line_color='rgba(0,0,0,0)', name="±1σ"))
 
-        # Zone 1-Sigma (Vert très clair)
-        fig.add_trace(go.Scatter(x=df['Date'], y=to_price(y_pred + std_err), line=dict(width=0), showlegend=False))
-        fig.add_trace(go.Scatter(x=df['Date'], y=to_price(y_pred - std_err), fill='tonexty', 
-                                 fillcolor='rgba(100, 255, 150, 0.15)', line=dict(width=0), name="Zone ±1σ (Canal)"))
+        # Tendance et Prix
+        fig.add_trace(go.Scatter(x=df['Date'], y=rev(y_pred), line=dict(color='orange', width=1, dash='dash'), name="Tendance"))
+        fig.add_trace(go.Scatter(x=df['Date'], y=df['Close'], line=dict(color='black', width=2), name="Prix"))
 
-        # Lignes de tendance
-        fig.add_trace(go.Scatter(x=df['Date'], y=to_price(y_pred), line=dict(color='rgba(255, 165, 0, 0.7)', width=1.5, dash='dash'), name="Tendance"))
-
-        # PRIX (Ligne principale, Noire sur fond blanc)
-        fig.add_trace(go.Scatter(x=df['Date'], y=df['Close'], line=dict(color='#000000', width=2.5), name="Prix de Clôture"))
-
-        # Mise en page (Theme Light)
+        # Mise en page simplifiée pour éviter le ValueError
         fig.update_layout(
-            title=dict(text=title_text, font=dict(size=26, color="black")),
-            template="plotly_white", # Force le thème clair
-            hovermode="x unified",
-            yaxis_type="log" if regression_type == "Logarithmique" else "linear",
-            paper_bgcolor='white', # Fond du papier blanc
-            plot_bgcolor='white',  # Fond du graphique blanc
-            yaxis=dict(
-                gridcolor='rgba(0,0,0,0.05)', # Grille très légère
-                side="right", 
-                title="Prix ($)",
-                tickfont=dict(color="#333"),
-                titlefont=dict(color="#333")
-            ),
-            xaxis=dict(
-                showgrid=False,
-                title="Année",
-                tickfont=dict(color="#333"),
-                titlefont=dict(color="#333")
-            ),
-            legend=dict(font=dict(color="#333"), bgcolor='rgba(255,255,255,0.7)')
+            title=f"<b>{name_display}</b> | {selected_ticker}",
+            template="plotly_white",
+            paper_bgcolor='white',
+            plot_bgcolor='white',
+            yaxis_type="log" if reg_mode == "Logarithmique" else "linear",
+            yaxis=dict(side="right", gridcolor='rgba(0,0,0,0.1)'),
+            xaxis=dict(showgrid=False),
+            margin=dict(l=20, r=20, t=60, b=20)
         )
         
         st.plotly_chart(fig, use_container_width=True)
 
-        # --- TABLEAU DE BORD (KPIs) ---
-        # Calculs KPIs
-        days = (df['Date'].iloc[-1] - df['Date'].iloc[0]).days
-        cagr = (df['Close'].iloc[-1] / df['Close'].iloc[0])**(365.25 / days) - 1
-        # Volatilité annualisée basée sur les rendements logarithmiques
-        vol = (np.log(df['Close'] / df['Close'].shift(1))).std() * np.sqrt(252)
-        # Position sigma actuelle
-        curr_y = np.log(df['Close'].iloc[-1]) if regression_type == "Logarithmique" else df['Close'].iloc[-1]
-        dist_sig = (curr_y - y_pred[-1]) / std_err
-
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Performance (CAGR)", f"{cagr:.2%}")
-        c2.metric("Volatilité", f"{vol:.2%}")
-        c3.metric("R² (Précision)", f"{model.score(X, y_val):.3f}")
+        # --- METRICS ---
+        c1, c2, c3 = st.columns(3)
+        # CAGR
+        years = (df['Date'].iloc[-1] - df['Date'].iloc[0]).days / 365.25
+        cagr = (df['Close'].iloc[-1] / df['Close'].iloc[0])**(1/years) - 1
+        # Sigma
+        cur_y = np.log(df['Close'].iloc[-1]) if reg_mode == "Logarithmique" else df['Close'].iloc[-1]
+        sig_pos = (cur_y - y_pred[-1]) / std_dev
         
-        # Indicateur de couleur pour la position sigma
-        delta_col = "inverse" if dist_sig > 1.5 else "normal"
-        c4.metric("Position Sigma", f"{dist_sig:.2f} σ", delta_color=delta_col)
-
-        # Niveaux Stratégiques sous forme de métriques
-        st.markdown("---")
-        st.subheader("🎯 Niveaux Stratégiques (Prix actuels)")
-        o1, o2, o3, o4 = st.columns(4)
-        o1.metric("Vente (+2σ)", f"{to_price(y_pred[-1] + 2*std_err):.2f}")
-        o2.metric("Haut Canal (+1σ)", f"{to_price(y_pred[-1] + std_err):.2f}")
-        o3.metric("Bas Canal (-1σ)", f"{to_price(y_pred[-1] - std_err):.2f}")
-        o4.metric("Achat (-2σ)", f"{to_price(y_pred[-1] - 2*std_err):.2f}")
-
-        # Commentaire automatique
-        st.divider()
-        status = "SURÉVALUÉ" if dist_sig > 1 else "SOUS-ÉVALUÉ" if dist_sig < -1 else "À SA VALEUR"
-        st.info(f"**Analyse :** Le titre est actuellement **{status}**. Sa croissance historique reste son moteur principal.")
-
+        c1.metric("Performance (CAGR)", f"{cagr:.2%}")
+        c2.metric("Fiabilité (R²)", f"{model.score(X, y):.3f}")
+        c3.metric("Position Sigma", f"{sig_pos:.2f} σ")
+        
+        st.write(f"**Objectif (+1σ) :** {rev(y_pred[-1] + std_dev):.2f} | **Support (-1σ) :** {rev(y_pred[-1] - std_dev):.2f}")
     else:
-        st.warning("Données insuffisantes ou ticker invalide pour générer l'analyse.")
+        st.error("Données introuvables ou ticker incorrect.")
