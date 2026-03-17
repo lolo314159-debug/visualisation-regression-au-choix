@@ -5,17 +5,17 @@ import numpy as np
 from sklearn.linear_model import LinearRegression
 import plotly.graph_objects as go
 
-st.set_page_config(page_title="Analyse Quantitative Premium", layout="wide")
+st.set_page_config(page_title="Analyse Quantitative Premium (Light)", layout="wide")
 
 # --- BARRE LATÉRALE ---
-st.sidebar.header("Source des données")
+st.sidebar.header("Configuration")
 input_method = st.sidebar.radio("Choisir la méthode :", ("Fichier Excel", "Saisie Manuelle"))
 
 selected_ticker = ""
 display_name = ""
 
 if input_method == "Fichier Excel":
-    uploaded_file = st.sidebar.file_uploader("Charger Excel", type="xlsx")
+    uploaded_file = st.sidebar.file_uploader("1. Charger Excel", type="xlsx")
     if uploaded_file:
         df_tickers = pd.read_excel(uploaded_file)
         cols = df_tickers.columns.tolist()
@@ -27,87 +27,92 @@ if input_method == "Fichier Excel":
         if n_col:
             display_name = df_tickers[df_tickers[t_col] == selected_ticker][n_col].iloc[0]
 else:
-    selected_ticker = st.sidebar.text_input("Saisir un Ticker (ex: AAPL, AIR.PA)", "MSFT").upper()
+    # Par défaut sur MSFT pour l'exemple
+    selected_ticker = st.sidebar.text_input("2. Saisir Ticker (ex: AAPL, AIR.PA)", "MSFT").upper()
 
-regression_type = st.sidebar.radio("Modèle", ("Logarithmique", "Linéaire"))
+regression_type = st.sidebar.radio("3. Modèle de calcul", ("Logarithmique", "Linéaire"))
 
 # --- RÉCUPÉRATION ET CALCULS ---
 if selected_ticker:
-    with st.spinner(f'Analyse de {selected_ticker}...'):
+    with st.spinner(f'Téléchargement et analyse de {selected_ticker}...'):
         ticker_obj = yf.Ticker(selected_ticker)
+        # Télécharger depuis 2000
         data = ticker_obj.history(start="2000-01-01")
         
-        # Récupérer le nom via Yahoo Finance si pas trouvé dans l'Excel
+        # Récupérer le nom complet via Yahoo Finance si pas trouvé dans l'Excel
         if not display_name:
             try: display_name = ticker_obj.info.get('longName', selected_ticker)
             except: display_name = selected_ticker
 
     if not data.empty and len(data) > 20:
+        # Nettoyage
         df = data[['Close']].copy()
         df = df.dropna().reset_index()
         
-        # Maths
+        # Maths pour la régression
         df['Index'] = np.arange(len(df)).reshape(-1, 1)
         X = df['Index'].values.reshape(-1, 1)
+        # Régression sur log ou prix brut
         y_val = np.log(df['Close'].values) if regression_type == "Logarithmique" else df['Close'].values
         
         model = LinearRegression().fit(X, y_val)
         y_pred = model.predict(X)
         std_err = np.std(y_val - y_pred)
         
-        def to_p(v): return np.exp(v) if regression_type == "Logarithmique" else v
+        # Fonction utilitaire pour repasser en prix réel
+        def to_price(v): return np.exp(v) if regression_type == "Logarithmique" else v
 
-        # --- GRAPHIQUE AVEC CANAUX PASTEL ---
+        # --- GRAPHIQUE ÉPURÉ (FONDS BLANC) ---
+        title_text = f"<b>{display_name}</b> <span style='color:#555;'>| {selected_ticker}</span>"
+        
         fig = go.Figure()
 
-        # Zone 2-Sigma (Rouge Pastel très léger)
-        fig.add_trace(go.Scatter(x=df['Date'], y=to_p(y_pred + 2*std_err), line=dict(width=0), showlegend=False))
-        fig.add_trace(go.Scatter(x=df['Date'], y=to_p(y_pred - 2*std_err), fill='tonexty', 
-                                 fillcolor='rgba(255, 0, 0, 0.05)', line=dict(width=0), name="Zone ±2σ (Extrême)"))
+        # Zones de volatilité Pastel (Arrière-plan)
+        # Zone 2-Sigma (Rouge très clair)
+        fig.add_trace(go.Scatter(x=df['Date'], y=to_price(y_pred + 2*std_err), line=dict(width=0), showlegend=False))
+        fig.add_trace(go.Scatter(x=df['Date'], y=to_price(y_pred - 2*std_err), fill='tonexty', 
+                                 fillcolor='rgba(255, 100, 100, 0.08)', line=dict(width=0), name="Zone ±2σ (Extrême)"))
 
-        # Zone 1-Sigma (Vert Pastel léger)
-        fig.add_trace(go.Scatter(x=df['Date'], y=to_p(y_pred + std_err), line=dict(width=0), showlegend=False))
-        fig.add_trace(go.Scatter(x=df['Date'], y=to_p(y_pred - std_err), fill='tonexty', 
-                                 fillcolor='rgba(0, 255, 100, 0.1)', line=dict(width=0), name="Zone ±1σ (Canal)"))
+        # Zone 1-Sigma (Vert très clair)
+        fig.add_trace(go.Scatter(x=df['Date'], y=to_price(y_pred + std_err), line=dict(width=0), showlegend=False))
+        fig.add_trace(go.Scatter(x=df['Date'], y=to_price(y_pred - std_err), fill='tonexty', 
+                                 fillcolor='rgba(100, 255, 150, 0.15)', line=dict(width=0), name="Zone ±1σ (Canal)"))
 
-        # Lignes de tendance et prix
-        fig.add_trace(go.Scatter(x=df['Date'], y=to_p(y_pred), line=dict(color='rgba(255, 165, 0, 0.6)', width=1.5, dash='dash'), name="Tendance"))
-        fig.add_trace(go.Scatter(x=df['Date'], y=df['Close'], line=dict(color='#FFFFFF', width=2.5), name="Prix de Clôture"))
+        # Lignes de tendance
+        fig.add_trace(go.Scatter(x=df['Date'], y=to_price(y_pred), line=dict(color='rgba(255, 165, 0, 0.7)', width=1.5, dash='dash'), name="Tendance"))
 
+        # PRIX (Ligne principale, Noire sur fond blanc)
+        fig.add_trace(go.Scatter(x=df['Date'], y=df['Close'], line=dict(color='#000000', width=2.5), name="Prix de Clôture"))
+
+        # Mise en page (Theme Light)
         fig.update_layout(
-            title=f"<b>{display_name}</b> <span style='color:gray;'>| {selected_ticker}</span>",
-            title_font_size=26,
-            template="plotly_dark",
+            title=dict(text=title_text, font=dict(size=26, color="black")),
+            template="plotly_white", # Force le thème clair
             hovermode="x unified",
             yaxis_type="log" if regression_type == "Logarithmique" else "linear",
-            paper_bgcolor='black', plot_bgcolor='black',
-            yaxis=dict(gridcolor='rgba(255,255,255,0.05)', side="right", title="Prix"),
-            xaxis=dict(showgrid=False)
+            paper_bgcolor='white', # Fond du papier blanc
+            plot_bgcolor='white',  # Fond du graphique blanc
+            yaxis=dict(
+                gridcolor='rgba(0,0,0,0.05)', # Grille très légère
+                side="right", 
+                title="Prix ($)",
+                tickfont=dict(color="#333"),
+                titlefont=dict(color="#333")
+            ),
+            xaxis=dict(
+                showgrid=False,
+                title="Année",
+                tickfont=dict(color="#333"),
+                titlefont=dict(color="#333")
+            ),
+            legend=dict(font=dict(color="#333"), bgcolor='rgba(255,255,255,0.7)')
         )
         
         st.plotly_chart(fig, use_container_width=True)
 
-        # --- KPIs ---
+        # --- TABLEAU DE BORD (KPIs) ---
+        # Calculs KPIs
         days = (df['Date'].iloc[-1] - df['Date'].iloc[0]).days
         cagr = (df['Close'].iloc[-1] / df['Close'].iloc[0])**(365.25 / days) - 1
-        vol = (np.log(df['Close'] / df['Close'].shift(1))).std() * np.sqrt(252)
-        curr_y = np.log(df['Close'].iloc[-1]) if regression_type == "Logarithmique" else df['Close'].iloc[-1]
-        dist_sig = (curr_y - y_pred[-1]) / std_err
-
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Performance (CAGR)", f"{cagr:.2%}")
-        c2.metric("Volatilité", f"{vol:.2%}")
-        c3.metric("R² (Précision)", f"{model.score(X, y_val):.3f}")
-        c4.metric("Position Sigma", f"{dist_sig:.2f} σ")
-
-        # Objectifs Rapides
-        st.markdown("---")
-        st.subheader("🎯 Niveaux Stratégiques")
-        o1, o2, o3, o4 = st.columns(4)
-        o1.metric("Vente (+2σ)", f"{to_p(y_pred[-1] + 2*std_err):.2f}")
-        o2.metric("Haut Canal (+1σ)", f"{to_p(y_pred[-1] + std_err):.2f}")
-        o3.metric("Bas Canal (-1σ)", f"{to_p(y_pred[-1] - std_err):.2f}")
-        o4.metric("Achat (-2σ)", f"{to_p(y_pred[-1] - 2*std_err):.2f}")
-
-    else:
-        st.warning("Données insuffisantes ou ticker invalide.")
+        # Volatilité annualisée basée sur les rendements logarithmiques
+        vol = (np.
