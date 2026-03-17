@@ -9,20 +9,23 @@ import tempfile
 
 st.set_page_config(page_title="Analyse Quantitative Pro", layout="wide")
 
-# --- FONCTION DE CALCUL CORE (CORRIGÉE) ---
+# --- FONCTION DE CALCUL (Correction des types de données) ---
 def run_analysis(ticker, name, reg_mode):
     try:
         data = yf.download(ticker, start="2000-01-01", progress=False)
         if data.empty or len(data) < 30: return None
         
         df = data[['Close']].copy().dropna().reset_index()
-        # Conversion explicite pour éviter les erreurs de type Series/Scalar
-        last_price = float(df['Close'].iloc[-1])
-        first_price = float(df['Close'].iloc[0])
         
+        # Extraction de valeurs scalaires pures pour éviter les erreurs de Series
+        last_p = float(df['Close'].iloc[-1])
+        first_p = float(df['Close'].iloc[0])
+        
+        # Calcul Volatilité
         df['Log_Ret'] = np.log(df['Close'] / df['Close'].shift(1))
         vol = float(df['Log_Ret'].std() * np.sqrt(252))
         
+        # Régression
         df['Idx'] = np.arange(len(df)).reshape(-1, 1)
         X = df['Idx'].values.reshape(-1, 1)
         y = np.log(df['Close'].values) if reg_mode == "Logarithmique" else df['Close'].values
@@ -32,23 +35,28 @@ def run_analysis(ticker, name, reg_mode):
         r2 = float(model.score(X, y))
         std_dev = float(np.std(y - y_pred))
         
-        years = (df['Date'].iloc[-1] - df['Date'].iloc[0]).days / 365.25
-        cagr = float((last_price / first_price)**(1/years) - 1)
-        cur_y = np.log(last_price) if reg_mode == "Logarithmique" else last_price
-        sig_pos = float((cur_y - y_pred[-1]) / std_dev)
+        # CAGR et Sigma
+        days = (df['Date'].iloc[-1] - df['Date'].iloc[0]).days
+        years = days / 365.25
+        cagr = float((last_p / first_p)**(1/years) - 1)
         
-        # Score Qualité (Logic corrigée)
+        cur_y_val = np.log(last_p) if reg_mode == "Logarithmique" else last_p
+        sig_pos = float((cur_y_val - float(y_pred[-1])) / std_dev)
+        
+        # Score Qualité (Correction de la ligne qui plantait)
         s_r2 = r2 * 4
-        s_cagr = min(max(cagr * 20, 0), 4)
-        s_vol = max(2 - (vol * 2), 0)
+        # Utilisation de max/min natif Python sur des floats
+        s_cagr = float(max(0, min(cagr * 20, 4))) 
+        s_vol = float(max(0, min(2 - (vol * 2), 2)))
         score = float(s_r2 + s_cagr + s_vol)
         
         return {
             "df": df, "y_pred": y_pred, "std_dev": std_dev, "r2": r2, 
             "cagr": cagr, "vol": vol, "sig_pos": sig_pos, "score": score,
-            "ticker": ticker, "name": name, "last_price": last_price
+            "ticker": ticker, "name": str(name), "last_p": last_p
         }
-    except:
+    except Exception as e:
+        st.sidebar.error(f"Erreur sur {ticker}: {e}")
         return None
 
 # --- INTERFACE ---
@@ -62,12 +70,12 @@ if method == "Fichier Excel":
     if file:
         df_excel = pd.read_excel(file)
         cols = df_excel.columns.tolist()
-        # Correction KeyError: cherche 'Ticker' ou la première colonne
-        t_col = 'Ticker' if 'Ticker' in cols else cols[0]
+        # On cherche dynamiquement les colonnes pour éviter les KeyError
+        t_col = next((c for c in cols if "ticker" in c.lower()), cols[0])
         n_col = next((c for c in cols if "nom" in c.lower()), t_col)
         
-        ticker_list = df_excel[t_col].dropna().unique().tolist()
-        selected_ticker = st.sidebar.selectbox("Action", ticker_list)
+        ticker_list = df_excel[t_col].dropna().astype(str).unique().tolist()
+        selected_ticker = st.sidebar.selectbox("Action à afficher", ticker_list)
         name_display = df_excel[df_excel[t_col] == selected_ticker][n_col].iloc[0]
         
         for _, row in df_excel.iterrows():
@@ -79,11 +87,14 @@ else:
 
 reg_mode = st.sidebar.radio("Modèle :", ("Logarithmique", "Linéaire"))
 
+# --- AFFICHAGE ---
 if selected_ticker:
     res = run_analysis(selected_ticker, name_display, reg_mode)
+    
     if res:
-        # Graphique
         def rev(v): return np.exp(v) if reg_mode == "Logarithmique" else v
+        
+        # Graphique
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=res['df']['Date'], y=rev(res['y_pred']+2*res['std_dev']), line_color='rgba(0,0,0,0)', showlegend=False))
         fig.add_trace(go.Scatter(x=res['df']['Date'], y=rev(res['y_pred']-2*res['std_dev']), fill='tonexty', fillcolor='rgba(255,0,0,0.05)', line_color='rgba(0,0,0,0)', name="±2σ"))
@@ -91,51 +102,29 @@ if selected_ticker:
         fig.add_trace(go.Scatter(x=res['df']['Date'], y=rev(res['y_pred']-res['std_dev']), fill='tonexty', fillcolor='rgba(0,200,0,0.1)', line_color='rgba(0,0,0,0)', name="±1σ"))
         fig.add_trace(go.Scatter(x=res['df']['Date'], y=rev(res['y_pred']), line=dict(color='orange', width=1, dash='dash'), name="Tendance"))
         fig.add_trace(go.Scatter(x=res['df']['Date'], y=res['df']['Close'], line=dict(color='black', width=2), name="Prix"))
-        fig.update_layout(title=f"<b>{res['name']}</b>", template="plotly_white", yaxis_type="log" if reg_mode == "Logarithmique" else "linear", yaxis=dict(side="right"))
+        
+        fig.update_layout(title=f"<b>{res['name']}</b> ({res['ticker']})", template="plotly_white", yaxis_type="log" if reg_mode == "Logarithmique" else "linear", yaxis=dict(side="right"))
         st.plotly_chart(fig, use_container_width=True)
 
         # Métriques
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("CAGR", f"{res['cagr']:.2%}")
-        c2.metric("Volatilité", f"{res['vol']:.2%}")
-        c3.metric("R²", f"{res['r2']:.3f}")
-        c4.metric("SCORE QUALITÉ", f"{res['score']:.1f} / 10")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("CAGR", f"{res['cagr']:.2%}")
+        m2.metric("Volatilité", f"{res['vol']:.2%}")
+        m3.metric("R²", f"{res['r2']:.3f}")
+        m4.metric("SCORE QUALITÉ", f"{res['score']:.1f} / 10")
 
-        # --- EXPORTS ---
-        st.divider()
-        col_pdf1, col_pdf2 = st.columns(2)
-        with col_pdf1:
-            if st.button("📄 Rapport PDF Action"):
-                pdf = FPDF()
-                pdf.add_page()
-                pdf.set_font("Arial", 'B', 16); pdf.cell(200, 10, f"Analyse : {res['name']}", ln=True, align='C')
-                pdf.set_font("Arial", '', 12); pdf.ln(10)
-                pdf.cell(200, 10, f"Score Qualite : {res['score']:.1f}/10 | Position : {res['sig_pos']:.2f} sigma", ln=True)
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-                    fig.write_image(tmp.name); pdf.image(tmp.name, x=10, y=50, w=190)
-                st.download_button("⬇️ Télécharger PDF", data=pdf.output(dest='S').encode('latin-1'), file_name=f"{res['ticker']}.pdf")
-
-        with col_pdf2:
-            if method == "Fichier Excel" and st.button("🗂️ Rapport Batch Trié"):
-                batch_results = []
-                with st.spinner("Calcul des opportunités..."):
-                    for t, n in tickers_to_process:
-                        analysis = run_analysis(t, n, reg_mode)
-                        if analysis: batch_results.append(analysis)
-                
-                # Tri par Sigma croissant (les plus sous-évaluées en premier)
-                batch_results.sort(key=lambda x: x['sig_pos'])
-                
-                pdf_b = FPDF()
-                pdf_b.add_page()
-                pdf_b.set_font("Arial", 'B', 14); pdf_b.cell(200, 10, "Classement par Opportunite Statistique (Sigma)", ln=True)
-                pdf_b.set_font("Courier", '', 9)
-                pdf_b.ln(5)
-                pdf_b.cell(200, 5, f"{'TICKER':<10} {'NOM':<25} {'SIGMA':<10} {'SCORE':<8} {'PRIX':<10}", ln=True)
-                pdf_b.cell(200, 2, "-"*65, ln=True)
-                
-                for r in batch_results:
-                    line = f"{r['ticker']:<10} {r['name'][:24]:<25} {r['sig_pos']:<10.2f} {r['score']:<8.1f} {r['last_price']:<10.2f}"
-                    pdf_b.cell(200, 5, line, ln=True)
-                
-                st.download_button("⬇️ Télécharger Liste Triée", data=pdf_b.output(dest='S').encode('latin-1'), file_name="Opportunites_Batch.pdf")
+        # Bouton PDF
+        if st.button("📄 Télécharger Rapport PDF"):
+            pdf = FPDF()
+            pdf.add_page()
+            pdf.set_font("Arial", 'B', 16)
+            pdf.cell(200, 10, f"Analyse : {res['name']}", ln=True, align='C')
+            pdf.set_font("Arial", '', 12)
+            pdf.ln(10)
+            pdf.cell(200, 10, f"Score : {res['score']:.1f}/10 | Position : {res['sig_pos']:.2f} sigma", ln=True)
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+                fig.write_image(tmp.name)
+                pdf.image(tmp.name, x=10, y=50, w=190)
+            st.download_button("Confirmer le téléchargement", data=pdf.output(dest='S').encode('latin-1'), file_name=f"{res['ticker']}.pdf")
+    else:
+        st.error("Impossible d'analyser ce titre. Vérifiez le ticker ou la connexion.")
