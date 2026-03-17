@@ -1,9 +1,8 @@
 streamlit
 yfinance
 pandas
-pandas_datareader
+numpy
 scikit-learn
 plotly
-openpyxl
-fpdf
-kaleido
+fpdf2
+kaleido==0.2.1
