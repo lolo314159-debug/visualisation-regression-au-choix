@@ -71,7 +71,7 @@ if uploaded_file:
             fig.add_trace(go.Scatter(x=df['Date'], y=to_p(y_pred), line=dict(color='orange', width=1.5, dash='dash'), name="Tendance"))
 
             # PRIX (L'élément principal)
-            fig.add_trace(go.Scatter(x=df['Date'], y=df['Close'], line=dict(color='white', width=2.5), name="Prix de Clôture"))
+            fig.add_trace(go.Scatter(x=df['Date'], y=df['Close'], line=dict(color='blue', width=2.5), name="Prix de Clôture"))
 
             fig.update_layout(
                 title=dict(text=title_text, font=dict(size=24)),
