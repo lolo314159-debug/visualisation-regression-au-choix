@@ -115,4 +115,33 @@ if selected_ticker:
         days = (df['Date'].iloc[-1] - df['Date'].iloc[0]).days
         cagr = (df['Close'].iloc[-1] / df['Close'].iloc[0])**(365.25 / days) - 1
         # Volatilité annualisée basée sur les rendements logarithmiques
-        vol = (np.
+        vol = (np.log(df['Close'] / df['Close'].shift(1))).std() * np.sqrt(252)
+        # Position sigma actuelle
+        curr_y = np.log(df['Close'].iloc[-1]) if regression_type == "Logarithmique" else df['Close'].iloc[-1]
+        dist_sig = (curr_y - y_pred[-1]) / std_err
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Performance (CAGR)", f"{cagr:.2%}")
+        c2.metric("Volatilité", f"{vol:.2%}")
+        c3.metric("R² (Précision)", f"{model.score(X, y_val):.3f}")
+        
+        # Indicateur de couleur pour la position sigma
+        delta_col = "inverse" if dist_sig > 1.5 else "normal"
+        c4.metric("Position Sigma", f"{dist_sig:.2f} σ", delta_color=delta_col)
+
+        # Niveaux Stratégiques sous forme de métriques
+        st.markdown("---")
+        st.subheader("🎯 Niveaux Stratégiques (Prix actuels)")
+        o1, o2, o3, o4 = st.columns(4)
+        o1.metric("Vente (+2σ)", f"{to_price(y_pred[-1] + 2*std_err):.2f}")
+        o2.metric("Haut Canal (+1σ)", f"{to_price(y_pred[-1] + std_err):.2f}")
+        o3.metric("Bas Canal (-1σ)", f"{to_price(y_pred[-1] - std_err):.2f}")
+        o4.metric("Achat (-2σ)", f"{to_price(y_pred[-1] - 2*std_err):.2f}")
+
+        # Commentaire automatique
+        st.divider()
+        status = "SURÉVALUÉ" if dist_sig > 1 else "SOUS-ÉVALUÉ" if dist_sig < -1 else "À SA VALEUR"
+        st.info(f"**Analyse :** Le titre est actuellement **{status}**. Sa croissance historique reste son moteur principal.")
+
+    else:
+        st.warning("Données insuffisantes ou ticker invalide pour générer l'analyse.")
