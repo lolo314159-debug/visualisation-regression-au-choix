@@ -102,6 +102,7 @@ if selected_ticker:
             
         with col_b:
             st.write(f"**Situation Actuelle :**")
+            st.write(f"- Prix actuel : {last_price:.2f}")
             st.write(f"- Écart à la tendance : {sig_pos:.2f} σ")
             if abs(sig_pos) > 2:
                 etat = "Anomalie statistique majeure"
