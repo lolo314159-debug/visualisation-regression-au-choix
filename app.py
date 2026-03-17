@@ -9,7 +9,7 @@ st.set_page_config(page_title="Analyse Quantitative", layout="wide")
 
 # --- SIDEBAR ---
 st.sidebar.header("Configuration")
-method = st.sidebar.radio("Source :", ("Saisie Manuelle", "Fichier Excel"))
+method = st.sidebar.radio("Source :", ("Saisie Manuelle", "Fichier Excel (ticker+nom)"))
 
 selected_ticker = ""
 name_display = ""
