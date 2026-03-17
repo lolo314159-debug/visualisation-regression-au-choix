@@ -49,51 +49,73 @@ if selected_ticker:
         
         model = LinearRegression().fit(X, y)
         y_pred = model.predict(X)
+        r2 = model.score(X, y)
         std_dev = np.std(y - y_pred)
         
         def rev(v): return np.exp(v) if reg_mode == "Logarithmique" else v
 
         # --- PLOTLY (FOND BLANC) ---
         fig = go.Figure()
-
-        # Zones Pastel
         fig.add_trace(go.Scatter(x=df['Date'], y=rev(y_pred + 2*std_dev), line_color='rgba(0,0,0,0)', showlegend=False))
-        fig.add_trace(go.Scatter(x=df['Date'], y=rev(y_pred - 2*std_dev), fill='tonexty', fillcolor='rgba(255, 0, 0, 0.05)', line_color='rgba(0,0,0,0)', name="±2σ"))
-        
+        fig.add_trace(go.Scatter(x=df['Date'], y=rev(y_pred - 2*std_dev), fill='tonexty', fillcolor='rgba(255, 0, 0, 0.05)', line_color='rgba(0,0,0,0)', name="Zone ±2σ"))
         fig.add_trace(go.Scatter(x=df['Date'], y=rev(y_pred + std_dev), line_color='rgba(0,0,0,0)', showlegend=False))
-        fig.add_trace(go.Scatter(x=df['Date'], y=rev(y_pred - std_dev), fill='tonexty', fillcolor='rgba(0, 200, 0, 0.1)', line_color='rgba(0,0,0,0)', name="±1σ"))
-
-        # Tendance et Prix
+        fig.add_trace(go.Scatter(x=df['Date'], y=rev(y_pred - std_dev), fill='tonexty', fillcolor='rgba(0, 200, 0, 0.1)', line_color='rgba(0,0,0,0)', name="Zone ±1σ"))
         fig.add_trace(go.Scatter(x=df['Date'], y=rev(y_pred), line=dict(color='orange', width=1, dash='dash'), name="Tendance"))
         fig.add_trace(go.Scatter(x=df['Date'], y=df['Close'], line=dict(color='black', width=2), name="Prix"))
 
-        # Mise en page simplifiée pour éviter le ValueError
         fig.update_layout(
             title=f"<b>{name_display}</b> | {selected_ticker}",
-            template="plotly_white",
-            paper_bgcolor='white',
-            plot_bgcolor='white',
+            template="plotly_white", paper_bgcolor='white', plot_bgcolor='white',
             yaxis_type="log" if reg_mode == "Logarithmique" else "linear",
-            yaxis=dict(side="right", gridcolor='rgba(0,0,0,0.1)'),
-            xaxis=dict(showgrid=False),
-            margin=dict(l=20, r=20, t=60, b=20)
+            yaxis=dict(side="right", gridcolor='rgba(0,0,0,0.1)'), xaxis=dict(showgrid=False)
         )
-        
         st.plotly_chart(fig, use_container_width=True)
 
-        # --- METRICS ---
-        c1, c2, c3 = st.columns(3)
-        # CAGR
+        # --- METRICS & OBJECTIFS ---
         years = (df['Date'].iloc[-1] - df['Date'].iloc[0]).days / 365.25
         cagr = (df['Close'].iloc[-1] / df['Close'].iloc[0])**(1/years) - 1
-        # Sigma
         cur_y = np.log(df['Close'].iloc[-1]) if reg_mode == "Logarithmique" else df['Close'].iloc[-1]
         sig_pos = (cur_y - y_pred[-1]) / std_dev
         
-        c1.metric("Performance (CAGR)", f"{cagr:.2%}")
-        c2.metric("Fiabilité (R²)", f"{model.score(X, y):.3f}")
-        c3.metric("Position Sigma", f"{sig_pos:.2f} σ")
+        st.subheader("🎯 Objectifs et Supports Théoriques")
+        o1, o2, o3, o4, o5 = st.columns(5)
+        o1.metric("Vente (+2σ)", f"{rev(y_pred[-1] + 2*std_dev):.2f}")
+        o2.metric("Objectif (+1σ)", f"{rev(y_pred[-1] + std_dev):.2f}")
+        o3.metric("Moyenne", f"{rev(y_pred[-1]):.2f}")
+        o4.metric("Support (-1σ)", f"{rev(y_pred[-1] - std_dev):.2f}")
+        o5.metric("Achat (-2σ)", f"{rev(y_pred[-1] - 2*std_dev):.2f}")
+
+        # --- ANALYSE FACTUELLE ---
+        st.divider()
+        st.subheader("📝 Rapport d'Analyse Quantitative")
         
-        st.write(f"**Objectif (+1σ) :** {rev(y_pred[-1] + std_dev):.2f} | **Support (-1σ) :** {rev(y_pred[-1] - std_dev):.2f}")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.write(f"**Évolution Historique :**")
+            st.write(f"- CAGR : {cagr:.2%}")
+            st.write(f"- Coefficient R² : {r2:.4f}")
+            reliable = "élevée" if r2 > 0.85 else "modérée" if r2 > 0.6 else "faible"
+            st.write(f"- Fiabilité du modèle : {reliable}")
+            
+        with col_b:
+            st.write(f"**Situation Actuelle :**")
+            st.write(f"- Écart à la tendance : {sig_pos:.2f} σ")
+            if abs(sig_pos) > 2:
+                etat = "Anomalie statistique majeure"
+            elif abs(sig_pos) > 1:
+                etat = "Écart significatif"
+            else:
+                etat = "Évolution normative"
+            st.write(f"- Statut : {etat}")
+
+        # Commentaire de synthèse
+        if sig_pos > 1.5:
+            msg = f"Le cours actuel présente une surévaluation statistique marquée (+{sig_pos:.2f}σ). Historiquement, une telle extension précède une phase de stagnation ou de correction vers la moyenne."
+            st.warning(msg)
+        elif sig_pos < -1.5:
+            msg = f"Le cours actuel présente une décote statistique significative ({sig_pos:.2f}σ). Le titre évolue sous son corridor de croissance normatif."
+            st.success(msg)
+        else:
+            st.info(f"Le titre évolue à {sig_pos:.2f}σ de sa tendance. Le prix est cohérent avec la trajectoire historique de long terme.")
     else:
-        st.error("Données introuvables ou ticker incorrect.")
+        st.error("Données insuffisantes.")
