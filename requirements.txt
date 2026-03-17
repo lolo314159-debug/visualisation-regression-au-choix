@@ -5,3 +5,5 @@ pandas_datareader
 scikit-learn
 plotly
 openpyxl
+fpdf
+kaleido
