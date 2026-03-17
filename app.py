@@ -4,6 +4,8 @@ import pandas as pd
 import numpy as np
 from sklearn.linear_model import LinearRegression
 import plotly.graph_objects as go
+from fpdf import FPDF
+import io
 
 st.set_page_config(page_title="Analyse Quantitative", layout="wide")
 
@@ -14,7 +16,7 @@ method = st.sidebar.radio("Source :", ("Saisie Manuelle", "Fichier Excel (ticker
 selected_ticker = ""
 name_display = ""
 
-if method == "Fichier Excel":
+if method == "Fichier Excel (ticker+nom)":
     file = st.sidebar.file_uploader("Charger Excel", type="xlsx")
     if file:
         df_excel = pd.read_excel(file)
@@ -24,13 +26,13 @@ if method == "Fichier Excel":
         ticker_list = df_excel[t_col].dropna().unique().tolist()
         selected_ticker = st.sidebar.selectbox("Choisir l'action", ticker_list)
         if n_col:
-            name_display = df_excel[df_excel[t_col] == selected_ticker][n_col].iloc[0]
+            name_display = str(df_excel[df_excel[t_col] == selected_ticker][n_col].iloc[0])
 else:
     selected_ticker = st.sidebar.text_input("Ticker (ex: NVDA, OR.PA)", "MSFT").upper()
 
 reg_mode = st.sidebar.radio("Modèle :", ("Logarithmique", "Linéaire"))
 
-# --- CALCULS ET GRAPHIQUE ---
+# --- LOGIQUE D'ANALYSE ---
 if selected_ticker:
     ticker_obj = yf.Ticker(selected_ticker)
     data = ticker_obj.history(start="2000-01-01")
@@ -42,19 +44,20 @@ if selected_ticker:
     if not data.empty and len(data) > 30:
         df = data[['Close']].copy().dropna().reset_index()
         
-        # Régression
+        # Préparation des données (sécurité scalaires)
         df['Idx'] = np.arange(len(df)).reshape(-1, 1)
         X = df['Idx'].values.reshape(-1, 1)
         y = np.log(df['Close'].values) if reg_mode == "Logarithmique" else df['Close'].values
         
+        # Régression
         model = LinearRegression().fit(X, y)
-        y_pred = model.predict(X)
-        r2 = model.score(X, y)
-        std_dev = np.std(y - y_pred)
+        y_pred = model.predict(X).flatten()
+        r2 = float(model.score(X, y))
+        std_dev = float(np.std(y - y_pred))
         
         def rev(v): return np.exp(v) if reg_mode == "Logarithmique" else v
 
-        # --- PLOTLY (FOND BLANC) ---
+        # --- GRAPH ET AFFICHAGE ---
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=df['Date'], y=rev(y_pred + 2*std_dev), line_color='rgba(0,0,0,0)', showlegend=False))
         fig.add_trace(go.Scatter(x=df['Date'], y=rev(y_pred - 2*std_dev), fill='tonexty', fillcolor='rgba(255, 0, 0, 0.05)', line_color='rgba(0,0,0,0)', name="Zone ±2σ"))
@@ -71,12 +74,20 @@ if selected_ticker:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        # --- METRICS & OBJECTIFS ---
+        # --- CALCULS MÉTRIQUES FINAUX ---
+        last_price = float(df['Close'].iloc[-1])
         years = (df['Date'].iloc[-1] - df['Date'].iloc[0]).days / 365.25
-        cagr = (df['Close'].iloc[-1] / df['Close'].iloc[0])**(1/years) - 1
-        cur_y = np.log(df['Close'].iloc[-1]) if reg_mode == "Logarithmique" else df['Close'].iloc[-1]
-        sig_pos = (cur_y - y_pred[-1]) / std_dev
+        cagr = float((last_price / df['Close'].iloc[0])**(1/years) - 1)
+        log_ret = np.log(df['Close'] / df['Close'].shift(1)).dropna()
+        vol = float(log_ret.std() * np.sqrt(252))
         
+        cur_y_val = np.log(last_price) if reg_mode == "Logarithmique" else last_price
+        sig_pos = float((cur_y_val - y_pred[-1]) / std_dev)
+
+        # SCORE DE QUALITÉ (Sur 10)
+        score_q = (r2 * 5) + (np.clip(cagr * 20, 0, 3)) + (np.clip(2 - vol, 0, 2))
+        
+        # --- BLOC OBJECTIFS (Ton affichage préféré) ---
         st.subheader("🎯 Objectifs et Supports Théoriques")
         o1, o2, o3, o4, o5 = st.columns(5)
         o1.metric("Vente (+2σ)", f"{rev(y_pred[-1] + 2*std_dev):.2f}")
@@ -85,37 +96,56 @@ if selected_ticker:
         o4.metric("Support (-1σ)", f"{rev(y_pred[-1] - std_dev):.2f}")
         o5.metric("Achat (-2σ)", f"{rev(y_pred[-1] - 2*std_dev):.2f}")
 
-        # --- ANALYSE FACTUELLE ---
+        # --- ANALYSE FINALE ENRICHIE ---
         st.divider()
-        st.subheader("📝 Rapport d'Analyse Quantitative")
+        c_diag1, c_diag2 = st.columns([2, 1])
         
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.write(f"**Évolution Historique :**")
-            st.write(f"- CAGR : {cagr:.2%}")
-            st.write(f"- Coefficient R² : {r2:.4f}")
-            reliable = "élevée" if r2 > 0.85 else "modérée" if r2 > 0.6 else "faible"
-            st.write(f"- Fiabilité du modèle : {reliable}")
-            
-        with col_b:
-            st.write(f"**Situation Actuelle :**")
-            st.write(f"- Écart à la tendance : {sig_pos:.2f} σ")
-            if abs(sig_pos) > 2:
-                etat = "Anomalie statistique majeure"
-            elif abs(sig_pos) > 1:
-                etat = "Écart significatif"
+        with c_diag1:
+            st.subheader("📝 Diagnostic de l'Investisseur")
+            # Logique d'analyse plus poussée
+            if r2 > 0.9: 
+                qualite_msg = "Exceptionnelle (Trajectoire quasi-parfaite)"
+            elif r2 > 0.7:
+                qualite_msg = "Robuste (Croissance structurée)"
             else:
-                etat = "Évolution normative"
-            st.write(f"- Statut : {etat}")
+                qualite_msg = "Cyclique ou Instable"
+                
+            st.write(f"**Qualité de la tendance :** {qualite_msg} (R²: {r2:.4f})")
+            st.write(f"**Performance annuelle moy. (CAGR) :** {cagr:.2%}")
+            st.write(f"**Score de Qualité Global :** {score_q:.1f} / 10")
+            
+            # Avis contextuel
+            if sig_pos < -1.5:
+                st.success(f"🔥 **OPPORTUNITÉ :** Le titre subit une décote rare ({sig_pos:.2f}σ). Probabilité de retour à la moyenne élevée.")
+            elif sig_pos > 1.5:
+                st.error(f"🚨 **PRUDENCE :** Surchauffe statistique (+{sig_pos:.2f}σ). Le risque de correction est maximal.")
+            else:
+                st.info(f"⚖️ **NEUTRE :** Le prix est en phase avec son corridor historique ({sig_pos:.2f}σ).")
 
-        # Commentaire de synthèse
-        if sig_pos > 1.5:
-            msg = f"Le cours actuel présente une surévaluation statistique marquée (+{sig_pos:.2f}σ). Historiquement, une telle extension précède une phase de stagnation ou de correction vers la moyenne."
-            st.warning(msg)
-        elif sig_pos < -1.5:
-            msg = f"Le cours actuel présente une décote statistique significative ({sig_pos:.2f}σ). Le titre évolue sous son corridor de croissance normatif."
-            st.success(msg)
-        else:
-            st.info(f"Le titre évolue à {sig_pos:.2f}σ de sa tendance. Le prix est cohérent avec la trajectoire historique de long terme.")
+        with c_diag2:
+            st.subheader("📄 Export")
+            if st.button("Générer Rapport PDF"):
+                try:
+                    # Capture image sans crash
+                    img_bytes = fig.to_image(format="png", engine="kaleido")
+                    pdf = FPDF()
+                    pdf.add_page()
+                    pdf.set_font("Arial", 'B', 16)
+                    pdf.cell(190, 10, f"Rapport Quantitatif : {name_display}", ln=True, align='C')
+                    pdf.image(io.BytesIO(img_bytes), x=10, y=25, w=190)
+                    
+                    pdf.set_y(135)
+                    pdf.set_font("Arial", 'B', 12)
+                    pdf.cell(190, 10, "Synthese des indicateurs :", ln=True)
+                    pdf.set_font("Arial", '', 11)
+                    pdf.cell(90, 8, f"Score de Qualite : {score_q:.1f}/10", border=1)
+                    pdf.cell(100, 8, f"Position Sigma : {sig_pos:.2f}", border=1, ln=True)
+                    pdf.cell(90, 8, f"CAGR Historique : {cagr:.2%}", border=1)
+                    pdf.cell(100, 8, f"Fiabilite (R2) : {r2:.4f}", border=1, ln=True)
+                    
+                    st.download_button("⬇️ Télécharger PDF", data=pdf.output(dest='S'), file_name=f"{selected_ticker}_Analyse.pdf")
+                except Exception as e:
+                    st.error(f"Erreur PDF : {e}")
+
     else:
-        st.error("Données insuffisantes.")
+        st.error("Données insuffisantes pour ce ticker.")
