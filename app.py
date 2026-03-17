@@ -41,14 +41,28 @@ if selected_ticker:
     ticker_obj = load_data(selected_ticker)
     #  ticker_obj = yf.Ticker(selected_ticker)
     data = ticker_obj.history(start="2000-01-01")
+
+
+# --- LOGIQUE DE CACHE ---
+@st.cache_data(ttl=3600)
+def load_data(ticker):
+    # yf.download renvoie déjà le tableau de données (DataFrame)
+    return yf.download(ticker, start="2000-01-01")
+
+if selected_ticker:
+    # 1. On charge les données directement dans 'data'
+    data = load_data(selected_ticker)
     
+    # 2. On récupère le nom (optionnel, car yf.download ne donne pas le nom long)
     if not name_display:
         try: name_display = ticker_obj.info.get('longName', selected_ticker)
         except: name_display = selected_ticker
 
+    # 3. On vérifie si les données existent
     if not data.empty and len(data) > 30:
+        # On utilise 'Close' comme dans votre version originale
         df = data[['Close']].copy().dropna().reset_index()
-        
+               
         # Régression
         df['Idx'] = np.arange(len(df)).reshape(-1, 1)
         X = df['Idx'].values.reshape(-1, 1)
