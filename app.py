@@ -4,115 +4,132 @@ import pandas as pd
 import numpy as np
 from sklearn.linear_model import LinearRegression
 import plotly.graph_objects as go
+from datetime import datetime
 
-st.set_page_config(page_title="Analyse Quantitative Log", layout="wide")
+st.set_page_config(page_title="Analyse Quantitative Avancée", layout="wide")
 
-st.title("📈 Analyse de Régression Log-Linéaire")
-st.write("Analyse des tendances de long terme depuis 2000.")
+st.title("📊 Analyse de Régression & Signaux Statistiques")
+st.write("Analyse de la tendance long terme, volatilité et objectifs théoriques.")
 
-# Configuration dans la barre latérale
-uploaded_file = st.sidebar.file_uploader("Charger votre fichier Excel (colonne 'Ticker')", type="xlsx")
-regression_type = st.sidebar.radio("Type de régression", ("Logarithmique (Recommandé)", "Linéaire"))
+# --- SIDEBAR : CHARGEMENT ET CONFIGURATION ---
+uploaded_file = st.sidebar.file_uploader("1. Charger le fichier Excel", type="xlsx")
+
 if uploaded_file:
     df_tickers = pd.read_excel(uploaded_file)
-    
-    # On récupère tous les noms de colonnes du fichier Excel
     columns = df_tickers.columns.tolist()
     
-    # On demande à l'utilisateur quelle colonne contient les Tickers
-    ticker_col = st.sidebar.selectbox("Sélectionnez la colonne des Tickers", columns)
+    # Correction automatique ou manuelle de la colonne
+    default_index = columns.index('Ticker') if 'Ticker' in columns else 0
+    ticker_col = st.sidebar.selectbox("2. Colonne des Tickers", columns, index=default_index)
     
-    ticker_list = df_tickers[ticker_col].tolist()
+    ticker_list = df_tickers[ticker_col].dropna().unique().tolist()
+    selected_ticker = st.sidebar.selectbox("3. Sélectionner l'action", ticker_list)
     
-    selected_ticker = st.sidebar.selectbox("Sélectionnez une action", ticker_list)
-    
+    regression_type = st.sidebar.radio("4. Type de modèle", ("Logarithmique (Recommandé)", "Linéaire"))
+
     if selected_ticker:
-        # Téléchargement (yfinance gère bien les données multi-index, on nettoie ici)
+        # --- DATA FETCHING ---
         data = yf.download(selected_ticker, start="2000-01-01")
         
         if not data.empty:
-            # On s'assure d'avoir un format plat (pour les téléchargements récents de yfinance)
             df = data[['Close']].copy()
-            df.columns = ['Close'] 
+            df.columns = ['Close']
             df.reset_index(inplace=True)
             
-            # Préparation des données pour la régression
+            # --- CALCULS FINANCIERS ---
+            # Volatilité annualisée (basée sur les rendements logarithmiques)
+            df['Log_Ret'] = np.log(df['Close'] / df['Close'].shift(1))
+            volatility = df['Log_Ret'].std() * np.sqrt(252)
+            
+            # CAGR (Taux de croissance annuel composé)
+            start_price = df['Close'].iloc[0]
+            end_price = df['Close'].iloc[-1]
+            num_years = (df['Date'].iloc[-1] - df['Date'].iloc[0]).days / 365.25
+            cagr = (end_price / start_price)**(1 / num_years) - 1
+            
+            # --- RÉGRESSION ---
             df['Time_Index'] = np.arange(len(df)).reshape(-1, 1)
             X = df['Time_Index'].values.reshape(-1, 1)
             
             if regression_type == "Logarithmique (Recommandé)":
-                # Calcul sur le Logarithme du prix
                 y_raw = np.log(df['Close'].values)
-                label_y = "Log(Prix)"
             else:
-                # Calcul sur le prix brut
                 y_raw = df['Close'].values
-                label_y = "Prix"
 
-            # 1. Ajustement du modèle
             model = LinearRegression()
             model.fit(X, y_raw)
-            
-            # 2. Prédictions et Sigma en espace Log (ou Linéaire)
             predictions_raw = model.predict(X)
             r_squared = model.score(X, y_raw)
-            residuals = y_raw - predictions_raw
-            std_dev = np.std(residuals)
+            std_dev = np.std(y_raw - predictions_raw)
             
-            # Création des bandes
-            if regression_type == "Logarithmique (Recommandé)":
-                # On repasse en mode exponentiel pour l'affichage sur le prix réel
-                df['Trend'] = np.exp(predictions_raw)
-                df['Upper_1s'] = np.exp(predictions_raw + std_dev)
-                df['Lower_1s'] = np.exp(predictions_raw - std_dev)
-                df['Upper_2s'] = np.exp(predictions_raw + 2 * std_dev)
-                df['Lower_2s'] = np.exp(predictions_raw - 2 * std_dev)
-            else:
-                df['Trend'] = predictions_raw
-                df['Upper_1s'] = predictions_raw + std_dev
-                df['Lower_1s'] = predictions_raw - std_dev
-                df['Upper_2s'] = predictions_raw + 2 * std_dev
-                df['Lower_2s'] = predictions_raw - 2 * std_dev
+            # Génération des courbes
+            def transform_back(val):
+                return np.exp(val) if regression_type == "Logarithmique (Recommandé)" else val
 
-            # 3. Graphique Interactif
+            df['Trend'] = transform_back(predictions_raw)
+            df['Up2'] = transform_back(predictions_raw + 2 * std_dev)
+            df['Up1'] = transform_back(predictions_raw + std_dev)
+            df['Low1'] = transform_back(predictions_raw - std_dev)
+            df['Low2'] = transform_back(predictions_raw - 2 * std_dev)
+
+            # --- VISUALISATION ---
             fig = go.Figure()
-            
-            # Bandes de confiance (Sigma 2)
-            fig.add_trace(go.Scatter(x=df['Date'], y=df['Upper_2s'], line=dict(width=0), showlegend=False))
-            fig.add_trace(go.Scatter(x=df['Date'], y=df['Lower_2s'], fill='tonexty', 
-                                     fillcolor='rgba(100, 100, 100, 0.2)', line=dict(width=0), name="Zone ±2σ"))
+            # Zones Sigma
+            fig.add_trace(go.Scatter(x=df['Date'], y=df['Up2'], line=dict(width=0), showlegend=False))
+            fig.add_trace(go.Scatter(x=df['Date'], y=df['Low2'], fill='tonexty', fillcolor='rgba(255, 0, 0, 0.05)', line=dict(width=0), name="Zone ±2σ (Extrême)"))
+            fig.add_trace(go.Scatter(x=df['Date'], y=df['Up1'], line=dict(width=0), showlegend=False))
+            fig.add_trace(go.Scatter(x=df['Date'], y=df['Low1'], fill='tonexty', fillcolor='rgba(0, 255, 0, 0.1)', line=dict(width=0), name="Zone ±1σ (Standard)"))
             
             # Prix et Tendance
-            fig.add_trace(go.Scatter(x=df['Date'], y=df['Close'], name="Prix", line=dict(color='#1f77b4', width=1.5)))
-            fig.add_trace(go.Scatter(x=df['Date'], y=df['Trend'], name="Tendance Centrale", line=dict(color='orange', dash='dot')))
+            fig.add_trace(go.Scatter(x=df['Date'], y=df['Close'], name="Prix", line=dict(color='white', width=1.5)))
+            fig.add_trace(go.Scatter(x=df['Date'], y=df['Trend'], name="Tendance", line=dict(color='orange', dash='dot')))
 
-            fig.update_layout(
-                title=f"Analyse {regression_type} pour {selected_ticker}",
-                yaxis_type="log" if regression_type == "Logarithmique (Recommandé)" else "linear",
-                template="plotly_dark",
-                hovermode="x unified"
-            )
+            fig.update_layout(template="plotly_dark", height=600, yaxis_type="log" if regression_type == "Logarithmique (Recommandé)" else "linear")
             st.plotly_chart(fig, use_container_width=True)
 
-            # 4. Indicateurs Clés
+            # --- TABLEAU DE BORD DES MÉTRIQUES ---
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("CAGR (Croissance)", f"{cagr:.2%}")
+            col2.metric("Volatilité (Ann.)", f"{volatility:.2%}")
+            col3.metric("R² (Fidélité)", f"{r_squared:.3f}")
+            
             current_price = df['Close'].iloc[-1]
-            last_trend = df['Trend'].iloc[-1]
-            # Calcul de la distance sigma actuelle
-            current_y_raw = np.log(current_price) if regression_type == "Logarithmique (Recommandé)" else current_price
-            last_pred_raw = predictions_raw[-1]
-            dist_sigma = (current_y_raw - last_pred_raw) / std_dev
+            last_pred = predictions_raw[-1]
+            current_raw = np.log(current_price) if regression_type == "Logarithmique (Recommandé)" else current_price
+            dist_sigma = (current_raw - last_pred) / std_dev
+            col4.metric("Position Sigma", f"{dist_sigma:.2f} σ")
 
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Prix Actuel", f"{current_price:.2f} $")
-            c2.metric("R² (Précision)", f"{r_squared:.4f}")
-            c3.metric("Position / Tendance", f"{dist_sigma:.2f} σ", 
-                      delta_color="inverse" if dist_sigma > 2 else "normal")
+            # --- PRIX SUPPORTS ET OBJECTIFS ---
+            st.subheader("🎯 Objectifs et Supports Théoriques (Prix actuels)")
+            t1, t2 = st.columns(2)
+            with t1:
+                st.write("**Objectifs (Haut de canal)**")
+                st.write(f"Vente Extrême (+2σ) : **{df['Up2'].iloc[-1]:.2f}**")
+                st.write(f"Objectif Standard (+1σ) : **{df['Up1'].iloc[-1]:.2f}**")
+            with t2:
+                st.write("**Supports (Bas de canal)**")
+                st.write(f"Support Standard (-1σ) : **{df['Low1'].iloc[-1]:.2f}**")
+                st.write(f"Achat Extrême (-2σ) : **{df['Low2'].iloc[-1]:.2f}**")
 
-            # 5. Interprétation
-            st.subheader("💡 Verdict de l'analyse")
-            if dist_sigma > 2:
-                st.warning(f"**Surévaluation critique :** Le titre est à {dist_sigma:.1f} écarts-types au-dessus de sa moyenne historique. Historiquement, un retour vers la tendance est probable.")
-            elif dist_sigma < -2:
-                st.success(f"**Sous-évaluation majeure :** Le titre est à {abs(dist_sigma):.1f} écarts-types sous sa tendance. Cela a souvent constitué un point d'entrée historique.")
+            # --- COMMENTAIRE PRÉCIS ---
+            st.divider()
+            st.subheader("📝 Analyse de la situation")
+            
+            # Analyse Tendance
+            tendance_txt = "robuste" if r_squared > 0.8 else "modérée"
+            croissance_txt = "exceptionnelle" if cagr > 0.15 else "stable"
+            
+            # Analyse Position
+            if dist_sigma > 1.5:
+                pos_txt = "en zone de surchauffe. Le prix est significativement éloigné de sa moyenne historique, suggérant une prudence à court terme."
+            elif dist_sigma < -1.5:
+                pos_txt = "en zone de sous-évaluation historique. Statistiquement, le titre offre un point d'entrée attractif par rapport à sa tendance."
             else:
-                st.info("Le titre oscille actuellement dans son corridor normal de croissance.")
+                pos_txt = "proche de sa valeur d'équilibre. Le marché valorise le titre en ligne avec ses fondamentaux historiques."
+
+            st.info(f"""
+            **Évolution Long Terme :** Depuis 2000, **{selected_ticker}** présente une croissance annuelle composée (CAGR) de **{cagr:.2%** avec une tendance jugée **{tendance_txt}** (R² de {r_squared:.2f}). 
+            La volatilité de **{volatility:.2%}** indique un profil de risque {'élevé' if volatility > 0.3 else 'modéré'}.
+            
+            **Position Actuelle :** Le titre se situe actuellement à **{dist_sigma:.2f} écart-type(s)** de sa droite de régression. Il est donc **{pos_txt}**
+            """)
