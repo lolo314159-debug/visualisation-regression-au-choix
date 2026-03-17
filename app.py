@@ -9,7 +9,7 @@ st.set_page_config(page_title="Analyse Quantitative", layout="wide")
 
 # --- SIDEBAR ---
 st.sidebar.header("Configuration")
-method = st.sidebar.radio("Source :", ("Saisie Manuelle", "Fichier Excel (ticker+nom)"))
+method = st.sidebar.radio("Source :", ("Saisie Manuelle", "Fichier Excel"))
 
 selected_ticker = ""
 name_display = ""
@@ -26,7 +26,7 @@ if method == "Fichier Excel":
         if n_col:
             name_display = df_excel[df_excel[t_col] == selected_ticker][n_col].iloc[0]
 else:
-    selected_ticker = st.sidebar.text_input("Ticker (ex: NVDA, OR.PA)", "MSFT").upper()
+    selected_ticker = st.sidebar.text_input("Ticker (ex: TRN.MI, NVDA)", "MSFT").upper()
 
 reg_mode = st.sidebar.radio("Modèle :", ("Logarithmique", "Linéaire"))
 
@@ -41,6 +41,10 @@ if selected_ticker:
 
     if not data.empty and len(data) > 30:
         df = data[['Close']].copy().dropna().reset_index()
+        
+        # Volatilité Annualisée
+        df['Log_Ret'] = np.log(df['Close'] / df['Close'].shift(1))
+        volatility = df['Log_Ret'].std() * np.sqrt(252)
         
         # Régression
         df['Idx'] = np.arange(len(df)).reshape(-1, 1)
@@ -57,9 +61,9 @@ if selected_ticker:
         # --- PLOTLY (FOND BLANC) ---
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=df['Date'], y=rev(y_pred + 2*std_dev), line_color='rgba(0,0,0,0)', showlegend=False))
-        fig.add_trace(go.Scatter(x=df['Date'], y=rev(y_pred - 2*std_dev), fill='tonexty', fillcolor='rgba(255, 0, 0, 0.05)', line_color='rgba(0,0,0,0)', name="Zone ±2σ"))
+        fig.add_trace(go.Scatter(x=df['Date'], y=rev(y_pred - 2*std_dev), fill='tonexty', fillcolor='rgba(255, 0, 0, 0.05)', line_color='rgba(0,0,0,0)', name="±2σ"))
         fig.add_trace(go.Scatter(x=df['Date'], y=rev(y_pred + std_dev), line_color='rgba(0,0,0,0)', showlegend=False))
-        fig.add_trace(go.Scatter(x=df['Date'], y=rev(y_pred - std_dev), fill='tonexty', fillcolor='rgba(0, 200, 0, 0.1)', line_color='rgba(0,0,0,0)', name="Zone ±1σ"))
+        fig.add_trace(go.Scatter(x=df['Date'], y=rev(y_pred - std_dev), fill='tonexty', fillcolor='rgba(0, 200, 0, 0.1)', line_color='rgba(0,0,0,0)', name="±1σ"))
         fig.add_trace(go.Scatter(x=df['Date'], y=rev(y_pred), line=dict(color='orange', width=1, dash='dash'), name="Tendance"))
         fig.add_trace(go.Scatter(x=df['Date'], y=df['Close'], line=dict(color='black', width=2), name="Prix"))
 
@@ -71,12 +75,19 @@ if selected_ticker:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        # --- METRICS & OBJECTIFS ---
+        # --- METRICS ---
         years = (df['Date'].iloc[-1] - df['Date'].iloc[0]).days / 365.25
         cagr = (df['Close'].iloc[-1] / df['Close'].iloc[0])**(1/years) - 1
         cur_y = np.log(df['Close'].iloc[-1]) if reg_mode == "Logarithmique" else df['Close'].iloc[-1]
         sig_pos = (cur_y - y_pred[-1]) / std_dev
         
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("CAGR", f"{cagr:.2%}")
+        c2.metric("Volatilité (Ann.)", f"{volatility:.2%}")
+        c3.metric("Fiabilité (R²)", f"{r2:.3f}")
+        c4.metric("Position Sigma", f"{sig_pos:.2f} σ")
+
+        # --- OBJECTIFS ---
         st.subheader("🎯 Objectifs et Supports Théoriques")
         o1, o2, o3, o4, o5 = st.columns(5)
         o1.metric("Vente (+2σ)", f"{rev(y_pred[-1] + 2*std_dev):.2f}")
@@ -85,37 +96,27 @@ if selected_ticker:
         o4.metric("Support (-1σ)", f"{rev(y_pred[-1] - std_dev):.2f}")
         o5.metric("Achat (-2σ)", f"{rev(y_pred[-1] - 2*std_dev):.2f}")
 
-        # --- ANALYSE FACTUELLE ---
+        # --- ANALYSE ---
         st.divider()
         st.subheader("📝 Rapport d'Analyse Quantitative")
         
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.write(f"**Évolution Historique :**")
-            st.write(f"- CAGR : {cagr:.2%}")
-            st.write(f"- Coefficient R² : {r2:.4f}")
-            reliable = "élevée" if r2 > 0.85 else "modérée" if r2 > 0.6 else "faible"
-            st.write(f"- Fiabilité du modèle : {reliable}")
-            
-        with col_b:
-            st.write(f"**Situation Actuelle :**")
-            st.write(f"- Écart à la tendance : {sig_pos:.2f} σ")
-            if abs(sig_pos) > 2:
-                etat = "Anomalie statistique majeure"
-            elif abs(sig_pos) > 1:
-                etat = "Écart significatif"
-            else:
-                etat = "Évolution normative"
-            st.write(f"- Statut : {etat}")
+        ca, cb = st.columns(2)
+        with ca:
+            st.write(f"**Historique :**")
+            st.write(f"- Performance annuelle (CAGR) : {cagr:.2%}")
+            st.write(f"- Volatilité intrinsèque : {volatility:.2%}")
+            st.write(f"- Qualité de la régression (R²) : {r2:.4f}")
+        with cb:
+            st.write(f"**Situation :**")
+            st.write(f"- Écart à la moyenne : {sig_pos:.2f} σ")
+            status = "Surchauffe" if sig_pos > 1.5 else "Décote" if sig_pos < -1.5 else "Neutre"
+            st.write(f"- Statut technique : {status}")
 
-        # Commentaire de synthèse
         if sig_pos > 1.5:
-            msg = f"Le cours actuel présente une surévaluation statistique marquée (+{sig_pos:.2f}σ). Historiquement, une telle extension précède une phase de stagnation ou de correction vers la moyenne."
-            st.warning(msg)
+            st.warning(f"Le titre présente une extension haussière de {sig_pos:.2f}σ. Risque de retour à la moyenne élevé.")
         elif sig_pos < -1.5:
-            msg = f"Le cours actuel présente une décote statistique significative ({sig_pos:.2f}σ). Le titre évolue sous son corridor de croissance normatif."
-            st.success(msg)
+            st.success(f"Le titre présente une décote de {sig_pos:.2f}σ. Configuration statistiquement favorable.")
         else:
-            st.info(f"Le titre évolue à {sig_pos:.2f}σ de sa tendance. Le prix est cohérent avec la trajectoire historique de long terme.")
+            st.info("Le titre évolue dans son canal normatif de long terme.")
     else:
         st.error("Données insuffisantes.")
